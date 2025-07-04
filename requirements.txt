@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+llama-cpp-python
+pydantic
+pytest
+httpx
+openai
+google-generativeai
+anthropic
+deepseek
+python-dotenv
