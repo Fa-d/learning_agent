@@ -60,8 +60,14 @@ Each chapter should have sections, and each section should have paragraphs as a 
             top_p=0.9,
             stop=[""]
         )
-        
-        course_json = json.loads(response['choices'][0]['text'].strip())
+
+        raw_text = response.get('choices', [{}])[0].get('text', '').strip()
+        if not raw_text:
+            raise RuntimeError(f"LLM provider returned empty response for course generation. Full response: {response}")
+        try:
+            course_json = json.loads(raw_text)
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse LLM response as JSON. Raw response: {raw_text}\nFull response: {response}\nError: {e}")
         return Course(**course_json)
 
     def generate_exam(self, paragraph: str, llm_provider_name: str = "llama") -> Exam:
