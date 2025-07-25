@@ -1,3 +1,15 @@
-node_modules
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+
+# Environment
 .env
-dist
+
+# IDE
+.idea/
+.vscode/
