@@ -1,29 +1,18 @@
 """
-LLM Service for VizLearn
-Integrates with existing local LLM setup and generates learning content
+Content generation service using local LLM
 """
-
-import os
 import json
 import asyncio
 import logging
-from typing import List, Optional, AsyncGenerator, Dict, Any
-from datetime import datetime
+from typing import List, Optional, AsyncGenerator
 
-# Set USER_AGENT before any other imports to suppress warnings
-if not os.getenv("USER_AGENT"):
-    os.environ["USER_AGENT"] = "VizLearn/1.0 (https://github.com/Fa-d/learning_agent)"
-
-from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from pydantic import SecretStr
-import requests
-from bs4 import BeautifulSoup
-import urllib.parse
+from openai.types.chat import ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
 
-from src.models import (
-    PlaygroundItem,
+from ..core.config import settings
+from ..core.models import (
     QuestionType,
+    PlaygroundItem,
     FillInTheBlankContent,
     TrueFalseContent,
     TrueFalseQuestionContent,
@@ -31,116 +20,70 @@ from src.models import (
     OrderingTaskContent,
     PlaygroundResponse
 )
-
-# Load environment variables
-load_dotenv()
+from ..utils.web_search import web_search
 
 logger = logging.getLogger(__name__)
 
-class LLMService:
+
+class ContentGenerationService:
     """Service for generating learning content using local LLM"""
     
     def __init__(self):
-        self.llm = None
-        self.tools = []
+        self.llm: Optional[AsyncOpenAI] = None
         self._is_ready = False
         
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initialize the LLM service"""
         try:
-            # Get LLM configuration from environment variables
-            llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
-            llm_api_key = os.getenv("LLM_API_KEY", "sk-not-needed")
+            logger.info(f"Initializing LLM with base URL: {settings.llm_base_url}")
             
-            logger.info(f"Initializing LLM with base URL: {llm_base_url}")
-            
-            # Initialize OpenAI client with configuration from environment
             self.llm = AsyncOpenAI(
-                base_url=llm_base_url,
-                api_key=llm_api_key,
-                timeout=30.0,
-                max_retries=2
+                base_url=settings.llm_base_url,
+                api_key=settings.llm_api_key,
+                timeout=settings.llm_timeout,
+                max_retries=settings.llm_max_retries
             )
             
-            # Initialize tools
-            self._setup_tools()
-            
-            # Test connection (but don't fail if it doesn't work initially)
+            # Test connection
             await self._test_connection()
             
-            # If initial test failed, try once more after a short delay
+            # Retry once if initial test failed
             if not self._is_ready:
                 logger.info("Initial connection failed, retrying after delay...")
                 await asyncio.sleep(2)
                 await self._test_connection()
             
-            logger.info("LLM Service initialization completed")
+            logger.info("Content generation service initialization completed")
             
         except Exception as e:
-            logger.error(f"Failed to initialize LLM service: {e}")
+            logger.error(f"Failed to initialize content generation service: {e}")
             self._is_ready = False
-            # Don't raise - allow service to start in degraded mode
     
-    def _setup_tools(self):
-        """Setup tools for web search and content enrichment"""
-        def search_web(query: str) -> str:
-            """Search the web using simple HTTP requests for additional information"""
-            try:
-                # Use a simple search approach with requests
-                search_url = "https://duckduckgo.com/lite/"
-                
-                params = {
-                    'q': query,
-                    'kl': 'us-en'
-                }
-                
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-                
-                response = requests.get(search_url, params=params, headers=headers, timeout=10)
-                
-                if response.status_code == 200:
-                    soup = BeautifulSoup(response.content, 'html.parser')
-                    
-                    # Extract some text content for context
-                    text_content = soup.get_text()
-                    
-                    # Clean and limit the content
-                    lines = [line.strip() for line in text_content.split('\n') if line.strip()]
-                    relevant_lines = [line for line in lines if query.lower() in line.lower()][:5]
-                    
-                    if relevant_lines:
-                        return f"Web search context for '{query}':\n" + "\n".join(relevant_lines)
-                    else:
-                        return f"Limited search results found for '{query}'. Generating content based on internal knowledge."
-                else:
-                    return "Web search temporarily unavailable. Generating content based on internal knowledge."
-                    
-            except Exception as e:
-                return f"Web search temporarily unavailable ({str(e)}). Generating content based on internal knowledge."
-        
-        # Store search function for direct use
-        self.search_func = search_web
-    
-    async def _test_connection(self):
+    async def _test_connection(self) -> None:
         """Test LLM connection"""
         try:
             logger.info("Testing LLM connection...")
+            if self.llm is None:
+                logger.error("LLM client is not initialized.")
+                self._is_ready = False
+                return
+                
             response = await self.llm.chat.completions.create(
-                model="local-model",
+                model=settings.llm_model,
                 messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=50
+                max_tokens=100
             )
-            logger.info(f"LLM connection test successful. Response: {response.choices[0].message.content[:50]}...")
+            
+            content = response.choices[0].message.content
+            if content is not None:
+                logger.info(f"LLM connection test successful. Response: {content[:50]}...")
+            else:
+                logger.info("LLM connection test successful, but response content is None.")
+            
             self._is_ready = True
+            
         except Exception as e:
             logger.error(f"LLM connection test failed: {e}")
-            logger.error(f"Error type: {type(e)}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            logger.warning("LLM service will be marked as unavailable")
-            # Don't raise the error - allow service to start without LLM
             self._is_ready = False
     
     def is_ready(self) -> bool:
@@ -163,10 +106,10 @@ class LLMService:
         
         return False
     
-    async def cleanup(self):
+    async def cleanup(self) -> None:
         """Cleanup resources"""
         self._is_ready = False
-        logger.info("LLM Service cleaned up")
+        logger.info("Content generation service cleaned up")
     
     def _create_system_prompt(self, title: str, description: str, question_types: List[QuestionType]) -> str:
         """Create system prompt for content generation"""
@@ -224,7 +167,7 @@ Generate one question at a time when streaming is enabled."""
     def _parse_llm_response(self, response_text: str, question_type: QuestionType, order: int) -> Optional[PlaygroundItem]:
         """Parse LLM response and create PlaygroundItem"""
         try:
-            # Try to extract JSON from response
+            # Clean response text
             response_text = response_text.strip()
             if response_text.startswith('```json'):
                 response_text = response_text[7:]
@@ -237,7 +180,6 @@ Generate one question at a time when streaming is enabled."""
             if question_type == QuestionType.FILL_IN_THE_BLANK:
                 content = FillInTheBlankContent(**data['content'])
             elif question_type == QuestionType.TRUE_FALSE:
-                # Parse true/false content
                 question_data = data['content']['question']
                 options_data = data['content']['options']
                 
@@ -273,23 +215,23 @@ Generate one question at a time when streaming is enabled."""
             logger.debug(f"Response text: {response_text}")
             return None
     
-    async def generate_learning_content(
+    async def generate_content_batch(
         self,
         title: str,
         description: str,
         num_questions: int = 5,
         question_types: Optional[List[QuestionType]] = None
     ) -> List[PlaygroundItem]:
-        """Generate learning content (batch mode)"""
+        """Generate learning content in batch mode"""
         if not self.is_ready():
-            raise RuntimeError("LLM service is not ready")
+            raise RuntimeError("Content generation service is not ready")
         
         if question_types is None:
             question_types = list(QuestionType)
         
         # Get context for content generation via web search
         search_query = f"{title} {description}"
-        additional_context = self.search_tool.func(search_query)
+        additional_context = web_search.search(search_query)
         
         system_prompt = self._create_system_prompt(title, description, question_types)
         user_prompt = f"""Generate {num_questions} educational questions about: {title}
@@ -305,17 +247,28 @@ Generate all questions now."""
         
         try:
             messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_prompt)
+                ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+                ChatCompletionUserMessageParam(role="user", content=user_prompt)
             ]
             
-            response = await self.llm.ainvoke(messages)
+            if self.llm is None:
+                raise RuntimeError("LLM client is not initialized. Please call initialize() first.")
+                
+            response = await self.llm.chat.completions.create(
+                model=settings.llm_model,
+                messages=messages,
+                max_tokens=2000
+            )
             
             # Parse response and create PlaygroundItems
             playground_items = []
             
+            response_content = response.choices[0].message.content
+            if not response_content:
+                response_content = ""
+            
             # Split response by questions and parse each
-            response_parts = response.content.split('\n\n')
+            response_parts = response_content.split('\n\n')
             
             for i, part in enumerate(response_parts):
                 if part.strip():
@@ -330,7 +283,7 @@ Generate all questions now."""
             logger.error(f"Failed to generate content: {e}")
             raise
     
-    async def generate_learning_content_stream(
+    async def generate_content_stream(
         self,
         title: str,
         description: str,
@@ -339,14 +292,14 @@ Generate all questions now."""
     ) -> AsyncGenerator[PlaygroundItem, None]:
         """Generate learning content with streaming"""
         if not self.is_ready():
-            raise RuntimeError("LLM service is not ready")
+            raise RuntimeError("Content generation service is not ready")
         
         if question_types is None:
             question_types = list(QuestionType)
         
         # Get context for content generation via web search
         search_query = f"{title} {description}"
-        additional_context = self.search_tool.func(search_query)
+        additional_context = web_search.search(search_query)
         
         system_prompt = self._create_system_prompt(title, description, question_types)
         
@@ -368,17 +321,22 @@ Generate a single, well-crafted question of type {question_type.value}."""
             
             try:
                 messages = [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=user_prompt)
+                    ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+                    ChatCompletionUserMessageParam(role="user", content=user_prompt)
                 ]
                 
-                # Stream response
-                response_chunks = []
-                async for chunk in self.llm.astream(messages):
-                    if chunk.content:
-                        response_chunks.append(chunk.content)
+                if self.llm is None:
+                    raise RuntimeError("LLM client is not initialized")
+                    
+                response = await self.llm.chat.completions.create(
+                    model=settings.llm_model,
+                    messages=messages,
+                    max_tokens=1000
+                )
                 
-                full_response = ''.join(response_chunks)
+                full_response = response.choices[0].message.content
+                if not full_response:
+                    full_response = ""
                 
                 # Parse and yield the item
                 item = self._parse_llm_response(full_response, question_type, i + 1)

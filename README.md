@@ -20,6 +20,35 @@ Frontend → FastAPI → Local LLM (localhost:1234)
               Web Search (DuckDuckGo)
 ```
 
+## 📁 Project Structure
+
+```
+VizLearn/
+├── src/                      # Source code
+│   ├── api/                  # API routes and endpoints
+│   │   ├── __init__.py
+│   │   └── routes.py
+│   ├── core/                 # Core configuration and models
+│   │   ├── __init__.py
+│   │   ├── config.py         # Application settings
+│   │   └── models.py         # Pydantic models
+│   ├── services/             # Business logic services
+│   │   ├── __init__.py
+│   │   ├── auth.py           # Authentication service
+│   │   └── content_generation.py  # LLM content generation
+│   ├── utils/                # Utility functions
+│   │   ├── __init__.py
+│   │   └── web_search.py     # Web search functionality
+│   └── __init__.py
+├── examples/                 # Example scripts and tests
+├── app.py                    # FastAPI application factory
+├── main.py                   # Entry point
+├── requirements.txt          # Python dependencies
+├── Dockerfile               # Container configuration
+├── docker-compose.yml       # Docker Compose setup
+└── .env.example             # Environment variables template
+```
+
 ## 📋 Prerequisites
 
 - Python 3.11+
@@ -51,6 +80,8 @@ Frontend → FastAPI → Local LLM (localhost:1234)
 5. **Run the application**:
    ```bash
    python main.py
+   # or
+   python app.py
    ```
 
 ### Option 2: Docker with Host LLM
