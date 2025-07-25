@@ -12,9 +12,16 @@ python-dotenv==1.1.1
 # OpenAI client for LLM integration
 openai==1.97.1
 
+# LangChain for enhanced web search and tools
+langchain-openai==0.3.28
+langchain-core==0.3.72
+langchain-community==0.3.27
+ddgs==9.4.3
+
 # Web scraping and HTTP requests
 requests==2.32.4
 beautifulsoup4==4.12.3
+aiohttp==3.12.14
 
 # File handling
 python-multipart==0.0.20

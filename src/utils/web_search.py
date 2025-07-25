@@ -1,82 +1,77 @@
 """
-Web search utilities for content enrichment
+Enhanced web search service using LangChain tools with DuckDuckGo
 """
 import logging
-from typing import Optional
-import requests
-from bs4 import BeautifulSoup
-
-from ..core.config import settings
+from typing import List, Optional
+from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_core.tools import Tool
 
 logger = logging.getLogger(__name__)
 
 
-class WebSearchService:
-    """Service for web searching to enrich content generation"""
+class LangChainWebSearchService:
+    """Enhanced web search service using LangChain with DuckDuckGo and website scraping"""
     
     def __init__(self):
-        self.enabled = settings.enable_web_search
-        self.max_results = settings.search_max_results
-        self.timeout = settings.search_timeout
-    
-    def search(self, query: str) -> str:
-        """
-        Search the web for additional context
+        self.search_tool = DuckDuckGoSearchRun()
         
-        Args:
-            query: Search query string
-            
-        Returns:
-            String containing search results or fallback message
-        """
-        if not self.enabled:
-            return self._get_fallback_message(query)
-            
+    def search(self, query: str, max_results: int = 5) -> str:
+        """Perform web search and return formatted results"""
         try:
-            return self._search_duckduckgo(query)
+            logger.info(f"Performing enhanced web search for: {query}")
+            
+            # Perform search using DuckDuckGo tool
+            search_results = self.search_tool.run(query)
+            
+            if not search_results:
+                logger.warning(f"No search results found for query: {query}")
+                return f"No search results found for '{query}'"
+            
+            return f"Search results for '{query}':\n{search_results}"
+            
         except Exception as e:
-            logger.warning(f"Web search failed for query '{query}': {e}")
-            return self._get_fallback_message(query)
+            logger.error(f"Web search failed for query '{query}': {e}")
+            return f"Web search failed for '{query}': {str(e)}"
     
-    def _search_duckduckgo(self, query: str) -> str:
-        """Search using DuckDuckGo lite interface"""
-        search_url = "https://duckduckgo.com/lite/"
-        
-        params = {
-            'q': query,
-            'kl': 'us-en'
-        }
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        response = requests.get(
-            search_url, 
-            params=params, 
-            headers=headers, 
-            timeout=self.timeout
-        )
-        
-        if response.status_code != 200:
-            raise Exception(f"Search request failed with status {response.status_code}")
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        text_content = soup.get_text()
-        
-        # Clean and limit the content
-        lines = [line.strip() for line in text_content.split('\n') if line.strip()]
-        relevant_lines = [line for line in lines if query.lower() in line.lower()][:self.max_results]
-        
-        if relevant_lines:
-            return f"Web search context for '{query}':\n" + "\n".join(relevant_lines)
-        else:
-            return self._get_fallback_message(query)
+    def _scrape_website(self, url: str) -> str:
+        """Scrape content from a website URL using WebBaseLoader"""
+        try:
+            logger.info(f"Scraping website: {url}")
+            
+            # Use WebBaseLoader to scrape the website
+            loader = WebBaseLoader(url)
+            docs = loader.load()
+            
+            if docs:
+                # Combine content from all documents
+                content = "\n".join([doc.page_content for doc in docs])
+                # Truncate if too long
+                if len(content) > 2000:
+                    content = content[:2000] + "...[truncated]"
+                return content
+            else:
+                return f"No content found at {url}"
+                
+        except Exception as e:
+            logger.error(f"Failed to scrape website {url}: {e}")
+            return f"Failed to scrape {url}: {str(e)}"
     
-    def _get_fallback_message(self, query: str) -> str:
-        """Get fallback message when search is unavailable"""
-        return f"Limited search results found for '{query}'. Generating content based on internal knowledge."
+    def get_tools(self) -> List[Tool]:
+        """Get LangChain tools for agent use"""
+        return [
+            Tool(
+                name="duckduckgo_search",
+                description="Search for information using DuckDuckGo. Use this when you need current information about a topic. Input should be a search query string.",
+                func=self.search
+            ),
+            Tool(
+                name="scrape_website",
+                description="Scrape content from a website URL. Use this to get detailed information from specific web pages. Input should be a valid URL.",
+                func=self._scrape_website
+            )
+        ]
 
 
-# Global instance
-web_search = WebSearchService()
+# Global web search service instance
+web_search = LangChainWebSearchService()
