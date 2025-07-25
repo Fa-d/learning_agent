@@ -1,13 +1,20 @@
 import os
+
+# Set USER_AGENT before any other imports to suppress warnings
+if not os.getenv("USER_AGENT"):
+    os.environ["USER_AGENT"] = "VizLearn/1.0 (https://github.com/Fa-d/learning_agent)"
+
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langchain_community.tools import DuckDuckGoSearchRun
 from langchain import hub
-from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain.tools import tool, Tool
+from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_community.document_loaders import WebBaseLoader
 import asyncio
 import aiohttp
+import warnings
+from pydantic import SecretStr
+from ddgs import DDGS
 
 # Load environment variables from .env file
 load_dotenv()
@@ -17,18 +24,47 @@ load_dotenv()
 llm = ChatOpenAI(
     streaming=True,  # Enable streaming
     base_url="http://localhost:1234/v1",
-    api_key="not-needed",
-    model_name="local-model"  # This will be ignored by the local server, but is required
+    api_key=SecretStr("sk-not-needed"),  # Local server doesn't validate this
+    model="local-model"  # This will be ignored by the local server, but is required
 )
 
 # 2. Set up the tools
+# Custom DuckDuckGo search tool using the new ddgs package
+def _search_duckduckgo(query: str) -> str:
+    """Search DuckDuckGo for the given query and return results."""
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=5))
+            if not results:
+                return "No search results found."
+            
+            formatted_results = []
+            for result in results:
+                title = result.get('title', 'No title')
+                body = result.get('body', 'No description')
+                href = result.get('href', 'No URL')
+                formatted_results.append(f"Title: {title}\nDescription: {body}\nURL: {href}\n")
+            
+            return "\n".join(formatted_results)
+    except Exception as e:
+        return f"Error searching DuckDuckGo: {str(e)}"
+
+duckduckgo_search = Tool.from_function(
+    func=_search_duckduckgo,
+    name="duckduckgo_search",
+    description="Search the web using DuckDuckGo. Input should be a search query string."
+)
+
 # In this case, we'll use DuckDuckGo for web searches and a custom tool for scraping
 async def _scrape_website(url: str) -> str:
     """Scrape content from a website and return it as a string."""
-    async with aiohttp.ClientSession() as session:
-        loader = WebBaseLoader(url, session=session)
-        docs =  loader.aload()
-        return "".join(doc.page_content for doc in docs)
+    try:
+        async with aiohttp.ClientSession() as session:
+            loader = WebBaseLoader(url, session=session)
+            docs = loader.aload()
+            return "".join(doc.page_content for doc in docs)
+    except Exception as e:
+        return f"Error scraping website: {str(e)}"
 
 scrape_website = Tool.from_function(
     func=_scrape_website,
@@ -36,7 +72,7 @@ scrape_website = Tool.from_function(
     description="Scrape content from a website and return it as a string."
 )
 
-tools = [DuckDuckGoSearchRun(), scrape_website]
+tools = [duckduckgo_search, scrape_website]
 
 # 3. Create the Agent
 # Get the prompt to use - you can modify this!
@@ -61,7 +97,7 @@ async def run_agent_and_stream(user_input: str):
         # Event that signifies the start of a new stream of tokens
         if kind == "on_chat_model_stream":
             if "chunk" in event["data"]:
-                print(event["data"]["chunk"], end="", flush=True)
+                print(event["data"]["chunk"].content, end="", flush=True)
         # Optional: Print other events for debugging if needed
         # elif kind == "on_tool_start":
         #     print(f"\n--- Tool Start: {event['name']} with input {event['data'].get('input')} ---")
@@ -74,6 +110,9 @@ async def run_agent_and_stream(user_input: str):
     print() # Newline after the full response
 
 if __name__ == "__main__":
+    # Suppress specific warnings
+    warnings.filterwarnings("ignore", category=ResourceWarning)
+    
     try:
         while True:
             user_input = input("You: ")
@@ -82,3 +121,13 @@ if __name__ == "__main__":
             asyncio.run(run_agent_and_stream(user_input))
     except KeyboardInterrupt:
         print("\nExiting...")
+    finally:
+        # Clean up any remaining tasks
+        try:
+            loop = asyncio.get_event_loop()
+            if not loop.is_closed():
+                pending = asyncio.all_tasks(loop)
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:
+            pass
